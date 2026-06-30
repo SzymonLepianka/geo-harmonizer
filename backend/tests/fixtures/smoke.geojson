@@ -1,0 +1,17 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "id": "smoke-polygon-1",
+      "properties": {
+        "name": "Poligon testowy importu",
+        "purpose": "smoke-test"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[19.0, 52.0], [19.002, 52.0], [19.002, 52.002], [19.0, 52.002], [19.0, 52.0]]]
+      }
+    }
+  ]
+}
