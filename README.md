@@ -66,6 +66,16 @@ docker compose up -d
 
 Web działa na `http://localhost:5173`, a API na `http://localhost:8000`.
 
+### Podkłady mapowe
+
+Zakładka **Mapa** pozwala wyłączyć podkład albo włączyć OpenStreetMap i ustawić
+jego krycie. Warstwy projektu, wyniki analiz i geometria wyboru obszaru mają
+stałe, wyższe poziomy renderowania niż podkład.
+
+Google Satellite nie jest domyślnie podłączony. Oficjalny Google Map Tiles API
+wymaga projektu Google Cloud z aktywnym rozliczaniem, klucza API oraz tworzenia
+tokenów sesji. Projekt celowo nie korzysta z nieoficjalnych adresów kafli Google.
+
 ## Dane demonstracyjne
 
 Po migracji uruchom:

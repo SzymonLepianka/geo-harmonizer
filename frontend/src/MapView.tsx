@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import Map from 'ol/Map'
 import View from 'ol/View'
 import GeoJSON from 'ol/format/GeoJSON'
+import TileLayer from 'ol/layer/Tile'
 import VectorLayer from 'ol/layer/Vector'
+import OSM from 'ol/source/OSM'
 import VectorSource from 'ol/source/Vector'
 import Draw, { createBox } from 'ol/interaction/Draw'
 import { Fill, Stroke, Style, Circle as CircleStyle } from 'ol/style'
@@ -10,8 +12,10 @@ import { fromLonLat, transformExtent } from 'ol/proj'
 import type { AnalysisRun, Layer } from './types'
 import type { ImportArea } from './SourceCatalog'
 import { HelpTooltip, LabelHelp } from './HelpTooltip'
+import { MAP_LAYER_Z_INDEX, projectLayerZIndex } from './mapLayers'
 
 const colors = ['#0f766e', '#c2410c', '#4338ca', '#be123c', '#047857', '#a16207']
+type BaseMapKey = 'NONE' | 'OSM'
 const styleFor = (color: string) => new Style({ stroke: new Stroke({ color, width: 2 }), fill: new Fill({ color: `${color}22` }), image: new CircleStyle({ radius: 5, fill: new Fill({ color }), stroke: new Stroke({ color: '#fff', width: 1 }) }) })
 const resultStyle = (feature: any) => {
   const severity = feature.get('severity')
@@ -21,12 +25,15 @@ const resultStyle = (feature: any) => {
 export function MapView({ projectId, layers, runs, selectingImportArea = false, onImportAreaSelected, onCancelImportArea }: { projectId: string; layers: Layer[]; runs: AnalysisRun[]; selectingImportArea?: boolean; onImportAreaSelected?: (area: ImportArea) => void; onCancelImportArea?: () => void }) {
   const target = useRef<HTMLDivElement>(null)
   const mapRef = useRef<Map>()
+  const baseLayer = useRef<TileLayer<OSM>>()
   const vectorLayers = useRef<Record<string, VectorLayer<VectorSource>>>({})
   const resultLayer = useRef<VectorLayer<VectorSource>>()
   const selectionLayer = useRef<VectorLayer<VectorSource>>()
   const [visible, setVisible] = useState<Record<string,boolean>>(() => Object.fromEntries(layers.map(layer => [layer.id, layer.is_visible_by_default])))
   const [selected, setSelected] = useState<Record<string,unknown> | null>(null)
   const [selectedRun, setSelectedRun] = useState('')
+  const [baseMap, setBaseMap] = useState<BaseMapKey>('OSM')
+  const [baseOpacity, setBaseOpacity] = useState(70)
 
   useEffect(() => {
     setVisible(current => {
@@ -40,9 +47,14 @@ export function MapView({ projectId, layers, runs, selectingImportArea = false, 
 
   useEffect(() => {
     if (!target.current || mapRef.current) return
-    const map = new Map({ target: target.current, layers: [], view: new View({ center: fromLonLat([19.1, 52.1]), zoom: 6 }) })
+    const osmLayer = new TileLayer({ source: new OSM(), opacity: 0.7 })
+    osmLayer.setZIndex(MAP_LAYER_Z_INDEX.base)
+    baseLayer.current = osmLayer
+    const map = new Map({ target: target.current, layers: [osmLayer], view: new View({ center: fromLonLat([19.1, 52.1]), zoom: 6 }) })
     resultLayer.current = new VectorLayer({ source: new VectorSource(), style: resultStyle })
     selectionLayer.current = new VectorLayer({ source: new VectorSource(), style: new Style({ stroke: new Stroke({ color: '#0e5553', width: 3, lineDash: [8, 5] }), fill: new Fill({ color: '#d9e89e44' }) }) })
+    resultLayer.current.setZIndex(MAP_LAYER_Z_INDEX.results)
+    selectionLayer.current.setZIndex(MAP_LAYER_Z_INDEX.selection)
     map.addLayer(resultLayer.current)
     map.addLayer(selectionLayer.current)
     map.on('singleclick', event => {
@@ -58,6 +70,11 @@ export function MapView({ projectId, layers, runs, selectingImportArea = false, 
     mapRef.current = map
     return () => { map.setTarget(undefined); mapRef.current = undefined }
   }, [])
+
+  useEffect(() => {
+    baseLayer.current?.setVisible(baseMap === 'OSM')
+    baseLayer.current?.setOpacity(baseOpacity / 100)
+  }, [baseMap, baseOpacity])
 
   useEffect(() => {
     const map = mapRef.current
@@ -90,6 +107,7 @@ export function MapView({ projectId, layers, runs, selectingImportArea = false, 
     layers.forEach((layer, index) => {
       if (!vectorLayers.current[layer.id]) {
         const vector = new VectorLayer({ source: new VectorSource(), style: styleFor(colors[index % colors.length]), visible: visible[layer.id] ?? true })
+        vector.setZIndex(projectLayerZIndex(index))
         vector.set('name', layer.name)
         vectorLayers.current[layer.id] = vector
         map.getLayers().insertAt(index, vector)
@@ -117,6 +135,12 @@ export function MapView({ projectId, layers, runs, selectingImportArea = false, 
   return <div className="map-layout">
     {selectingImportArea && <div className="map-selection-banner"><div><strong>Wybierz obszar importu</strong><small>Narysuj prostokąt na mapie albo użyj aktualnego widoku.</small></div><button type="button" className="secondary" onClick={useCurrentView}>Użyj aktualnego widoku</button><button type="button" className="secondary" onClick={onCancelImportArea}>Anuluj</button></div>}
     <aside className="map-sidebar">
+      <section className="base-map-controls">
+        <h3>Podkład mapy <HelpTooltip text="Podkład jest zawsze renderowany pod warstwami projektu i wynikami analiz. W danej chwili może być aktywny tylko jeden podkład."/></h3>
+        <label><LabelHelp label="Źródło podkładu" text="Wybierz OpenStreetMap albo całkowicie wyłącz podkład."/><select value={baseMap} onChange={event => setBaseMap(event.target.value as BaseMapKey)}><option value="NONE">Brak podkładu</option><option value="OSM">OpenStreetMap</option></select></label>
+        <label><LabelHelp label="Krycie podkładu" text="0% oznacza pełną przezroczystość, a 100% — pełne krycie. Warstwy projektu pozostają nad podkładem."/><div className="opacity-control"><input aria-label="Krycie podkładu" type="range" min="0" max="100" step="5" value={baseOpacity} disabled={baseMap === 'NONE'} onInput={event => setBaseOpacity(Number(event.currentTarget.value))}/><output>{baseOpacity}%</output></div></label>
+        <small className="base-map-note">Google Satellite nie jest włączony: oficjalny Google Map Tiles API wymaga klucza, aktywnego rozliczania i tokenów sesji.</small>
+      </section>
       <h3>Warstwy projektu <HelpTooltip text="Włącz kilka warstw, aby porównać ich przebieg. Kliknięcie geometrii otwiera panel atrybutów."/></h3>
       {layers.length === 0 && <p className="muted">Brak warstw. Użyj zakładki Import.</p>}
       {layers.map(layer => <label className="layer-toggle" key={layer.id}><input type="checkbox" checked={visible[layer.id] ?? false} onChange={event => setVisible(current => ({ ...current, [layer.id]: event.target.checked }))}/><span>{layer.name}</span><small>{layer.feature_count}</small></label>)}
