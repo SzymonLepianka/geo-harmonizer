@@ -1,5 +1,5 @@
+import hashlib
 import math
-import shutil
 import tempfile
 import uuid
 import zipfile
@@ -19,7 +19,7 @@ from shapely.geometry import box
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import DatasetImport, DataSource, Feature, Layer
+from app.models import DatasetImport, DataSource, Feature, Layer, SourceRegistry
 from app.services.events import add_event
 
 
@@ -208,30 +208,59 @@ def import_uploaded_file(
     layer_name: str,
     source_name: str,
     target_crs: str,
+    catalog_source: SourceRegistry | None = None,
 ) -> tuple[DatasetImport, Layer]:
     if target_crs.upper() != "EPSG:2180":
         raise HTTPException(status_code=422, detail="MVP zapisuje dane wyłącznie w EPSG:2180")
     filename = Path(upload.filename or "upload").name
-    source, record = _create_import_records(db, project_id=project_id, source_name=source_name, source_type="FILE_UPLOAD", registry_key="FILE_UPLOAD", original_filename=filename)
+    source, record = _create_import_records(
+        db,
+        project_id=project_id,
+        source_name=source_name,
+        source_type="FILE_UPLOAD",
+        registry_key=catalog_source.key if catalog_source else "FILE_UPLOAD",
+        original_filename=filename,
+        url=catalog_source.service_url if catalog_source else None,
+    )
+    if catalog_source:
+        source.provider = catalog_source.provider
+        source.description = catalog_source.description
+        source.legal_note = catalog_source.legal_note
     logs: list[str] = []
     try:
         detected_format = _format_for_path(Path(filename))
-        source.registry_key = {
-            "GeoJSON": "FILE_GEOJSON",
-            "GPKG": "FILE_GPKG",
-            "SHP_ZIP": "FILE_SHP_ZIP",
-            "GML": "FILE_GML",
-        }[detected_format]
+        if not catalog_source:
+            source.registry_key = {
+                "GeoJSON": "FILE_GEOJSON",
+                "GPKG": "FILE_GPKG",
+                "SHP_ZIP": "FILE_SHP_ZIP",
+                "GML": "FILE_GML",
+            }[detected_format]
         record.status = "RUNNING"
         record.started_at = datetime.now(UTC)
         record.detected_format = detected_format
         db.commit()
         with tempfile.TemporaryDirectory(prefix="geoharmonizer-") as temp:
             path = Path(temp) / filename
+            digest = hashlib.sha256()
+            upload_size = 0
             with path.open("wb") as destination:
-                shutil.copyfileobj(upload.file, destination)
-            if path.stat().st_size > get_settings().max_upload_mb * 1024 * 1024:
-                raise ImportFailure("Plik przekracza skonfigurowany limit rozmiaru")
+                while chunk := upload.file.read(1024 * 1024):
+                    upload_size += len(chunk)
+                    if upload_size > get_settings().max_upload_mb * 1024 * 1024:
+                        raise ImportFailure("Plik przekracza skonfigurowany limit rozmiaru")
+                    digest.update(chunk)
+                    destination.write(chunk)
+            record.metadata_json = {
+                "upload_size_bytes": upload_size,
+                "sha256": digest.hexdigest(),
+                "original_filename": filename,
+                "source_catalog_key": catalog_source.key if catalog_source else None,
+                "dataset_version": catalog_source.dataset_version if catalog_source else None,
+                "last_verified_at": catalog_source.last_verified_at.isoformat()
+                if catalog_source and catalog_source.last_verified_at
+                else None,
+            }
             gdf = _read_vector(path, detected_format, logs)
             gdf, detected_crs = _normalize_frame(gdf, detected_format, logs)
             record = db.get(DatasetImport, record.id)

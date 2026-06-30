@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     max_upload_mb: int = 200
     wfs_timeout_seconds: int = 60
     max_wfs_mb: int = 100
+    max_catalog_features: int = 20_000
 
     model_config = SettingsConfigDict(
         env_file=(ROOT_DIR / ".env", ROOT_DIR / "backend" / ".env"),
@@ -48,4 +49,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

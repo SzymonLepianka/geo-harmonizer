@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from app.enums import LAYER_TYPES, UserRole
+from app.enums import UserRole
 
 
 class ORMModel(BaseModel):
@@ -100,27 +100,22 @@ class ImportOut(ORMModel):
     finished_at: datetime | None
 
 
-class WFSImportRequest(BaseModel):
-    url: str = Field(min_length=8)
-    typename: str | None = None
-    bbox: str | None = None
-    layer_type: str
-    layer_name: str = Field(min_length=1, max_length=300)
-    source_name: str = Field(min_length=1, max_length=300)
-    target_crs: str = "EPSG:2180"
+class CatalogImportRequest(BaseModel):
+    source_key: str = Field(min_length=2, max_length=120)
+    bbox: list[float] | None = None
+    area_preset_key: str | None = None
+    layer_name: str | None = Field(default=None, min_length=1, max_length=300)
 
-    @field_validator("url")
+    @field_validator("bbox")
     @classmethod
-    def validate_url(cls, value: str) -> str:
-        if not value.lower().startswith(("http://", "https://")):
-            raise ValueError("WFS wymaga adresu HTTP lub HTTPS")
-        return value
-
-    @field_validator("layer_type")
-    @classmethod
-    def validate_layer_type(cls, value: str) -> str:
-        if value not in LAYER_TYPES:
-            raise ValueError("Nieobsługiwany typ warstwy")
+    def validate_bbox(cls, value: list[float] | None) -> list[float] | None:
+        if value is None:
+            return value
+        if len(value) != 4:
+            raise ValueError("BBOX musi zawierać cztery współrzędne")
+        min_lon, min_lat, max_lon, max_lat = value
+        if not (-180 <= min_lon < max_lon <= 180 and -90 <= min_lat < max_lat <= 90):
+            raise ValueError("BBOX jest niepoprawny lub wykracza poza WGS84")
         return value
 
 
@@ -211,5 +206,48 @@ class SourceRegistryOut(ORMModel):
     description: str
     limitations: str | None
     instruction_md: str | None
+    provider: str | None
+    service_type: str | None
+    service_url: str | None
+    documentation_url: str | None
+    import_mode: str
+    dataset_version: str | None
+    default_layer_type: str | None
+    geometry_type: str | None
+    geographic_scope: str | None
+    legal_note: str | None
+    adapter_config: dict[str, Any]
+    is_active: bool
+    sort_order: int
+    last_verified_at: datetime | None
+    last_check_status: str | None
+    last_check_message: str | None
+    last_checked_at: datetime | None
     created_at: datetime
 
+
+class CatalogCheckOut(BaseModel):
+    key: str
+    status: str
+    checked_at: datetime
+    response_ms: int | None = None
+    service_version: str | None = None
+    available_layers: list[str] = Field(default_factory=list)
+    message: str
+
+
+class CatalogPreviewOut(BaseModel):
+    source_key: str
+    source_name: str
+    bbox: list[float]
+    estimated_feature_count: int | None
+    feature_limit: int
+    allowed: bool
+    warnings: list[str] = Field(default_factory=list)
+
+
+class AreaPresetOut(BaseModel):
+    key: str
+    name: str
+    description: str
+    bbox: list[float]

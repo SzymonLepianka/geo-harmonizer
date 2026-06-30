@@ -8,7 +8,7 @@ from shapely.geometry import Polygon, box
 
 from app.dependencies import require_editor
 from app.models import User
-from app.schemas import WFSImportRequest
+from app.schemas import CatalogImportRequest
 from app.services.imports import _normalize_frame
 
 
@@ -24,9 +24,9 @@ def test_admin_can_edit():
     assert require_editor(admin) is admin
 
 
-def test_wfs_rejects_non_http_url():
+def test_catalog_import_rejects_invalid_bbox():
     with pytest.raises(ValidationError):
-        WFSImportRequest(url="file:///tmp/data.gml", layer_type="GENERIC_POLYGON", layer_name="Test", source_name="Test")
+        CatalogImportRequest(source_key="TEST", bbox=[19.2, 49.7, 19.1, 49.8])
 
 
 def test_geojson_without_crs_is_assumed_wgs84_and_transformed():
@@ -43,4 +43,3 @@ def test_invalid_geometry_is_repaired():
     normalized, _ = _normalize_frame(frame, "GeoJSON", logs)
     assert normalized.geometry.iloc[0].is_valid
     assert any("naprawiono" in message for message in logs)
-

@@ -7,14 +7,56 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.dependencies import get_current_user, get_project_or_404, require_editor
 from app.models import DataSource, SourceRegistry, User
-from app.schemas import DataSourceCreate, DataSourceOut, SourceRegistryOut
+from app.schemas import (
+    AreaPresetOut,
+    CatalogCheckOut,
+    DataSourceCreate,
+    DataSourceOut,
+    SourceRegistryOut,
+)
+from app.services.catalog_imports import (
+    AREA_PRESETS,
+    check_catalog_source,
+    get_catalog_source,
+)
 
 router = APIRouter(tags=["sources"])
 
 
 @router.get("/api/source-registry", response_model=list[SourceRegistryOut])
 def source_registry(db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> list[SourceRegistry]:
-    return list(db.scalars(select(SourceRegistry).order_by(SourceRegistry.category, SourceRegistry.name)).all())
+    return list(db.scalars(select(SourceRegistry).order_by(SourceRegistry.sort_order, SourceRegistry.name)).all())
+
+
+@router.get("/api/source-catalog", response_model=list[SourceRegistryOut])
+def source_catalog(
+    category: str | None = None,
+    import_mode: str | None = None,
+    status: str | None = None,
+    include_inactive: bool = True,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> list[SourceRegistry]:
+    query = select(SourceRegistry)
+    if category:
+        query = query.where(SourceRegistry.category == category)
+    if import_mode:
+        query = query.where(SourceRegistry.import_mode == import_mode)
+    if status:
+        query = query.where(SourceRegistry.implementation_status == status)
+    if not include_inactive:
+        query = query.where(SourceRegistry.is_active.is_(True))
+    return list(db.scalars(query.order_by(SourceRegistry.sort_order, SourceRegistry.name)).all())
+
+
+@router.get("/api/source-catalog/area-presets", response_model=list[AreaPresetOut])
+def area_presets(_: User = Depends(get_current_user)) -> list[dict]:
+    return list(AREA_PRESETS.values())
+
+
+@router.post("/api/source-catalog/{key}/check", response_model=CatalogCheckOut)
+def check_source(key: str, db: Session = Depends(get_db), _: User = Depends(require_editor)) -> CatalogCheckOut:
+    return check_catalog_source(db, get_catalog_source(db, key))
 
 
 @router.get("/api/projects/{project_id}/data-sources", response_model=list[DataSourceOut])
@@ -39,4 +81,3 @@ def get_source(project_id: uuid.UUID, source_id: uuid.UUID, db: Session = Depend
     if not source or source.project_id != project_id:
         raise HTTPException(status_code=404, detail="Nie znaleziono źródła danych")
     return source
-

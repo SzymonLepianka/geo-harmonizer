@@ -88,6 +88,10 @@ Wszystkie tolerancje i progi są jawnie wpisywane przez użytkownika. Wyniki mo�
 
 Obsługiwane są GeoJSON/JSON, pierwsza warstwa GeoPackage, pierwszy SHP w ZIP, podstawowy GML oraz podstawowy WFS. Dane są naprawiane, sprowadzane do 2D i transformowane do EPSG:2180. GeoJSON bez CRS jest interpretowany jako EPSG:4326; pozostałe formaty muszą określać CRS.
 
+Główną ścieżką jest prowadzony import ze zweryfikowanego katalogu. Użytkownik wybiera źródło i ograniczony obszar, a backend stosuje zapisany profil WFS (wersję, format i kolejność osi), wykonuje podgląd liczby obiektów oraz zapisuje metadane reprodukowalności. Surowy URL WFS nie jest przyjmowany. Duże paczki i materiały PZGiK mają instrukcje ręczne.
+
+Metodyka i stan usług z 30.06.2026: [docs/source-catalog-research.md](docs/source-catalog-research.md).
+
 ## Testy i kontrola jakości
 
 ```powershell
