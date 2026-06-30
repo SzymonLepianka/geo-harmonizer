@@ -41,7 +41,13 @@ export function MapView({ projectId, layers, runs }: { projectId: string; layers
     map.addLayer(resultLayer.current)
     map.on('singleclick', event => {
       const feature = map.forEachFeatureAtPixel(event.pixel, item => item)
-      setSelected(feature ? feature.getProperties() : null)
+      if (!feature) {
+        setSelected(null)
+        return
+      }
+      const properties = { ...feature.getProperties() }
+      delete properties.geometry
+      setSelected(properties)
     })
     mapRef.current = map
     return () => { map.setTarget(undefined); mapRef.current = undefined }

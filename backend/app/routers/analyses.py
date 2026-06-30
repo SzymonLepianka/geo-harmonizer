@@ -4,6 +4,7 @@ import json
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -57,13 +58,16 @@ def get_results(project_id: uuid.UUID, run_id: uuid.UUID, result_type: str | Non
 
 
 @router.get("/api/projects/{project_id}/analysis-runs/{run_id}/results.geojson")
-def results_geojson(project_id: uuid.UUID, run_id: uuid.UUID, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict:
+def results_geojson(project_id: uuid.UUID, run_id: uuid.UUID, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> Response:
     _get_run(project_id, run_id, db)
     rows = db.execute(select(AnalysisResult, func.ST_AsGeoJSON(func.ST_Transform(AnalysisResult.geom, 4326))).where(AnalysisResult.analysis_run_id == run_id, AnalysisResult.geom.is_not(None))).all()
     features = []
     for result, geometry in rows:
         features.append({"type": "Feature", "id": str(result.id), "geometry": json.loads(geometry), "properties": {"id": str(result.id), "result_type": result.result_type, "severity": result.severity, "label": result.label, "description": result.description, "recommendation": result.recommendation, "metrics": result.metrics_json}})
-    return {"type": "FeatureCollection", "features": features}
+    return JSONResponse(
+        content={"type": "FeatureCollection", "features": features},
+        headers={"Content-Disposition": f'attachment; filename="analysis-{run_id}.geojson"'},
+    )
 
 
 @router.get("/api/projects/{project_id}/analysis-runs/{run_id}/results.csv")
@@ -76,4 +80,3 @@ def results_csv(project_id: uuid.UUID, run_id: uuid.UUID, db: Session = Depends(
     for item in results:
         writer.writerow([item.id, item.result_type, item.severity, item.label, item.description, item.recommendation, item.feature_a_id or "", item.feature_b_id or "", json.dumps(item.metrics_json, ensure_ascii=False)])
     return Response(content="\ufeff" + output.getvalue(), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="analysis-{run_id}.csv"'})
-
