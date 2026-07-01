@@ -7,6 +7,8 @@ import VectorLayer from 'ol/layer/Vector'
 import OSM from 'ol/source/OSM'
 import VectorSource from 'ol/source/Vector'
 import Draw, { createBox } from 'ol/interaction/Draw'
+import DragPan from 'ol/interaction/DragPan'
+import { defaults as defaultInteractions } from 'ol/interaction/defaults'
 import { Fill, Stroke, Style, Circle as CircleStyle } from 'ol/style'
 import { fromLonLat, transformExtent } from 'ol/proj'
 import type { AnalysisRun, Layer } from './types'
@@ -16,6 +18,7 @@ import { MAP_LAYER_Z_INDEX, projectLayerZIndex } from './mapLayers'
 
 const colors = ['#0f766e', '#c2410c', '#4338ca', '#be123c', '#047857', '#a16207']
 type BaseMapKey = 'NONE' | 'OSM'
+type MapTool = 'PAN' | 'IDENTIFY'
 const styleFor = (color: string) => new Style({ stroke: new Stroke({ color, width: 2 }), fill: new Fill({ color: `${color}22` }), image: new CircleStyle({ radius: 5, fill: new Fill({ color }), stroke: new Stroke({ color: '#fff', width: 1 }) }) })
 const resultStyle = (feature: any) => {
   const severity = feature.get('severity')
@@ -29,11 +32,14 @@ export function MapView({ projectId, layers, runs, selectingImportArea = false, 
   const vectorLayers = useRef<Record<string, VectorLayer<VectorSource>>>({})
   const resultLayer = useRef<VectorLayer<VectorSource>>()
   const selectionLayer = useRef<VectorLayer<VectorSource>>()
+  const primaryDragPan = useRef<DragPan>()
+  const activeTool = useRef<MapTool>('PAN')
   const [visible, setVisible] = useState<Record<string,boolean>>(() => Object.fromEntries(layers.map(layer => [layer.id, layer.is_visible_by_default])))
   const [selected, setSelected] = useState<Record<string,unknown> | null>(null)
   const [selectedRun, setSelectedRun] = useState('')
   const [baseMap, setBaseMap] = useState<BaseMapKey>('OSM')
   const [baseOpacity, setBaseOpacity] = useState(70)
+  const [mapTool, setMapTool] = useState<MapTool>('PAN')
 
   useEffect(() => {
     setVisible(current => {
@@ -50,7 +56,15 @@ export function MapView({ projectId, layers, runs, selectingImportArea = false, 
     const osmLayer = new TileLayer({ source: new OSM(), opacity: 0.7 })
     osmLayer.setZIndex(MAP_LAYER_Z_INDEX.base)
     baseLayer.current = osmLayer
-    const map = new Map({ target: target.current, layers: [osmLayer], view: new View({ center: fromLonLat([19.1, 52.1]), zoom: 6 }) })
+    const leftButtonPan = new DragPan({ condition: event => event.originalEvent.button === 0 })
+    const middleButtonPan = new DragPan({ condition: event => event.originalEvent.button === 1 })
+    primaryDragPan.current = leftButtonPan
+    const map = new Map({
+      target: target.current,
+      layers: [osmLayer],
+      interactions: defaultInteractions({ dragPan: false }).extend([leftButtonPan, middleButtonPan]),
+      view: new View({ center: fromLonLat([19.1, 52.1]), zoom: 6 }),
+    })
     resultLayer.current = new VectorLayer({ source: new VectorSource(), style: resultStyle })
     selectionLayer.current = new VectorLayer({ source: new VectorSource(), style: new Style({ stroke: new Stroke({ color: '#0e5553', width: 3, lineDash: [8, 5] }), fill: new Fill({ color: '#d9e89e44' }) }) })
     resultLayer.current.setZIndex(MAP_LAYER_Z_INDEX.results)
@@ -58,6 +72,7 @@ export function MapView({ projectId, layers, runs, selectingImportArea = false, 
     map.addLayer(resultLayer.current)
     map.addLayer(selectionLayer.current)
     map.on('singleclick', event => {
+      if (activeTool.current !== 'IDENTIFY') return
       const feature = map.forEachFeatureAtPixel(event.pixel, item => item)
       if (!feature) {
         setSelected(null)
@@ -70,6 +85,12 @@ export function MapView({ projectId, layers, runs, selectingImportArea = false, 
     mapRef.current = map
     return () => { map.setTarget(undefined); mapRef.current = undefined }
   }, [])
+
+  useEffect(() => {
+    activeTool.current = mapTool
+    primaryDragPan.current?.setActive(mapTool === 'PAN')
+    if (mapTool === 'PAN') setSelected(null)
+  }, [mapTool])
 
   useEffect(() => {
     baseLayer.current?.setVisible(baseMap === 'OSM')
@@ -141,13 +162,25 @@ export function MapView({ projectId, layers, runs, selectingImportArea = false, 
         <label><LabelHelp label="Krycie podkładu" text="0% oznacza pełną przezroczystość, a 100% — pełne krycie. Warstwy projektu pozostają nad podkładem."/><div className="opacity-control"><input aria-label="Krycie podkładu" type="range" min="0" max="100" step="5" value={baseOpacity} disabled={baseMap === 'NONE'} onInput={event => setBaseOpacity(Number(event.currentTarget.value))}/><output>{baseOpacity}%</output></div></label>
         <small className="base-map-note">Google Satellite nie jest włączony: oficjalny Google Map Tiles API wymaga klucza, aktywnego rozliczania i tokenów sesji.</small>
       </section>
-      <h3>Warstwy projektu <HelpTooltip text="Włącz kilka warstw, aby porównać ich przebieg. Kliknięcie geometrii otwiera panel atrybutów."/></h3>
+      <h3>Warstwy projektu <HelpTooltip text="Włącz kilka warstw, aby porównać ich przebieg. Aby odczytać atrybuty geometrii, wybierz na mapie narzędzie Informacja."/></h3>
       {layers.length === 0 && <p className="muted">Brak warstw. Użyj zakładki Import.</p>}
       {layers.map(layer => <label className="layer-toggle" key={layer.id}><input type="checkbox" checked={visible[layer.id] ?? false} onChange={event => setVisible(current => ({ ...current, [layer.id]: event.target.checked }))}/><span>{layer.name}</span><small>{layer.feature_count}</small></label>)}
       <label><LabelHelp label="Wyniki analizy" text="Wybranie zakończonej analizy nakłada jej geometrie na mapę i automatycznie dopasowuje widok."/><select value={selectedRun} onChange={event => setSelectedRun(event.target.value)}><option value="">Bez wyników</option>{runs.filter(run => run.status === 'DONE').map(run => <option key={run.id} value={run.id}>{run.name}</option>)}</select></label>
       <div className="legend"><h4>Priorytet wyników <HelpTooltip text="Kolor oznacza priorytet przeglądu wyniku, a nie wiążącą ocenę prawną."/></h4><span className="dot info"/> INFO <span className="dot low"/> LOW <span className="dot medium"/> MEDIUM <span className="dot high"/> HIGH</div>
     </aside>
-    <div className="map-canvas" ref={target} aria-label="Mapa projektu"/>
+    <div className="map-stage">
+      <div className="map-tools" role="toolbar" aria-label="Narzędzia mapy">
+        <div className="map-tool">
+          <button type="button" className={`map-tool-button ${mapTool === 'PAN' ? 'active' : ''}`} aria-label="Przesuwanie mapy" aria-describedby="map-tool-pan-help" aria-pressed={mapTool === 'PAN'} onClick={() => setMapTool('PAN')}><span aria-hidden="true">✋</span></button>
+          <span id="map-tool-pan-help" className="map-tool-tooltip" role="tooltip"><strong>Przesuwanie</strong> Przytrzymaj lewy przycisk myszy i przeciągnij mapę.</span>
+        </div>
+        <div className="map-tool">
+          <button type="button" className={`map-tool-button ${mapTool === 'IDENTIFY' ? 'active' : ''}`} aria-label="Informacja o obiekcie" aria-describedby="map-tool-identify-help" aria-pressed={mapTool === 'IDENTIFY'} onClick={() => setMapTool('IDENTIFY')}><span aria-hidden="true">i</span></button>
+          <span id="map-tool-identify-help" className="map-tool-tooltip" role="tooltip"><strong>Informacja</strong> Kliknij geometrię, aby wyświetlić jej atrybuty. Mapę nadal przesuniesz, przeciągając ją środkowym przyciskiem myszy.</span>
+        </div>
+      </div>
+      <div className={`map-canvas tool-${mapTool.toLowerCase()} ${selectingImportArea ? 'tool-draw' : ''}`} ref={target} aria-label="Mapa projektu"/>
+    </div>
     {selected && <aside className="feature-panel"><button className="icon-button" onClick={() => setSelected(null)} aria-label="Zamknij">×</button><h3>Atrybuty obiektu</h3><pre>{JSON.stringify(selected, null, 2)}</pre></aside>}
   </div>
 }
