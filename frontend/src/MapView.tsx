@@ -2,9 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import Map from 'ol/Map'
 import View from 'ol/View'
 import GeoJSON from 'ol/format/GeoJSON'
+import WMTSCapabilities from 'ol/format/WMTSCapabilities'
 import TileLayer from 'ol/layer/Tile'
 import VectorLayer from 'ol/layer/Vector'
 import OSM from 'ol/source/OSM'
+import TileWMS from 'ol/source/TileWMS'
+import WMTS, { optionsFromCapabilities } from 'ol/source/WMTS'
 import VectorSource from 'ol/source/Vector'
 import Draw, { createBox } from 'ol/interaction/Draw'
 import DragPan from 'ol/interaction/DragPan'
@@ -17,7 +20,8 @@ import { HelpTooltip, LabelHelp } from './HelpTooltip'
 import { MAP_LAYER_Z_INDEX, projectLayerZIndex } from './mapLayers'
 
 const colors = ['#0f766e', '#c2410c', '#4338ca', '#be123c', '#047857', '#a16207']
-type BaseMapKey = 'NONE' | 'OSM'
+type BaseMapKey = 'NONE' | 'OSM' | 'GEOPORTAL_ORTHO' | 'GEOPORTAL_TOPO' | 'GEOPORTAL_BDOT10K'
+type BaseMapSource = OSM | TileWMS | WMTS
 type MapTool = 'PAN' | 'IDENTIFY'
 const styleFor = (color: string) => new Style({ stroke: new Stroke({ color, width: 2 }), fill: new Fill({ color: `${color}22` }), image: new CircleStyle({ radius: 5, fill: new Fill({ color }), stroke: new Stroke({ color: '#fff', width: 1 }) }) })
 const resultStyle = (feature: any) => {
@@ -28,7 +32,7 @@ const resultStyle = (feature: any) => {
 export function MapView({ projectId, layers, runs, selectingImportArea = false, onImportAreaSelected, onCancelImportArea }: { projectId: string; layers: Layer[]; runs: AnalysisRun[]; selectingImportArea?: boolean; onImportAreaSelected?: (area: ImportArea) => void; onCancelImportArea?: () => void }) {
   const target = useRef<HTMLDivElement>(null)
   const mapRef = useRef<Map>()
-  const baseLayer = useRef<TileLayer<OSM>>()
+  const baseLayers = useRef<Partial<Record<BaseMapKey, TileLayer<BaseMapSource>>>>({})
   const vectorLayers = useRef<Record<string, VectorLayer<VectorSource>>>({})
   const resultLayer = useRef<VectorLayer<VectorSource>>()
   const selectionLayer = useRef<VectorLayer<VectorSource>>()
@@ -54,14 +58,32 @@ export function MapView({ projectId, layers, runs, selectingImportArea = false, 
   useEffect(() => {
     if (!target.current || mapRef.current) return
     const osmLayer = new TileLayer({ source: new OSM(), opacity: 0.7 })
-    osmLayer.setZIndex(MAP_LAYER_Z_INDEX.base)
-    baseLayer.current = osmLayer
+    const geoportalOrthoLayer = new TileLayer<BaseMapSource>({ visible: false, opacity: 0.7 })
+    void fetch('https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMTS/StandardResolution?SERVICE=WMTS&REQUEST=GetCapabilities').then(response => response.text()).then(xml => {
+      const capabilities = new WMTSCapabilities().read(xml)
+      const options = optionsFromCapabilities(capabilities, { layer: 'ORTOFOTOMAPA', matrixSet: 'EPSG:3857' })
+      if (options) geoportalOrthoLayer.setSource(new WMTS({ ...options, crossOrigin: 'anonymous', attributions: '© GUGiK / Geoportal.gov.pl' }))
+    }).catch(() => undefined)
+    const geoportalTopoLayer = new TileLayer<BaseMapSource>({ visible: false, opacity: 0.7 })
+    void fetch('https://mapy.geoportal.gov.pl/wss/service/WMTS/guest/wmts/TOPO?SERVICE=WMTS&REQUEST=GetCapabilities').then(response => response.text()).then(xml => {
+      const capabilities = new WMTSCapabilities().read(xml)
+      const options = optionsFromCapabilities(capabilities, { layer: 'MAPA TOPOGRAFICZNA', matrixSet: 'EPSG:4326' })
+      if (options) {
+        const source = new WMTS({ ...options, crossOrigin: 'anonymous', attributions: '© GUGiK / Geoportal.gov.pl' })
+        const urls = source.getUrls()
+        if (urls) source.setUrls(urls.map(url => url.replace(/^http:/, 'https:')))
+        geoportalTopoLayer.setSource(source)
+      }
+    }).catch(() => undefined)
+    const geoportalBdotLayer = new TileLayer({ visible: false, opacity: 0.7, source: new TileWMS({ url: 'https://integracja.gugik.gov.pl/cgi-bin/KrajowaIntegracjaBazDanychObiektowTopograficznych', params: { LAYERS: 'bdot', TILED: true, VERSION: '1.3.0', FORMAT: 'image/png' }, crossOrigin: 'anonymous', attributions: '© GUGiK / Geoportal.gov.pl' }) })
+    baseLayers.current = { OSM: osmLayer, GEOPORTAL_ORTHO: geoportalOrthoLayer, GEOPORTAL_TOPO: geoportalTopoLayer, GEOPORTAL_BDOT10K: geoportalBdotLayer }
+    Object.values(baseLayers.current).forEach(layer => layer?.setZIndex(MAP_LAYER_Z_INDEX.base))
     const leftButtonPan = new DragPan({ condition: event => event.originalEvent.button === 0 })
     const middleButtonPan = new DragPan({ condition: event => event.originalEvent.button === 1 })
     primaryDragPan.current = leftButtonPan
     const map = new Map({
       target: target.current,
-      layers: [osmLayer],
+      layers: [osmLayer, geoportalOrthoLayer, geoportalTopoLayer, geoportalBdotLayer],
       interactions: defaultInteractions({ dragPan: false }).extend([leftButtonPan, middleButtonPan]),
       view: new View({ center: fromLonLat([19.1, 52.1]), zoom: 6 }),
     })
@@ -93,8 +115,10 @@ export function MapView({ projectId, layers, runs, selectingImportArea = false, 
   }, [mapTool])
 
   useEffect(() => {
-    baseLayer.current?.setVisible(baseMap === 'OSM')
-    baseLayer.current?.setOpacity(baseOpacity / 100)
+    Object.entries(baseLayers.current).forEach(([key, layer]) => {
+      layer?.setVisible(key === baseMap)
+      layer?.setOpacity(baseOpacity / 100)
+    })
   }, [baseMap, baseOpacity])
 
   useEffect(() => {
@@ -158,9 +182,8 @@ export function MapView({ projectId, layers, runs, selectingImportArea = false, 
     <aside className="map-sidebar">
       <section className="base-map-controls">
         <h3>Podkład mapy <HelpTooltip text="Podkład jest zawsze renderowany pod warstwami projektu i wynikami analiz. W danej chwili może być aktywny tylko jeden podkład."/></h3>
-        <label><LabelHelp label="Źródło podkładu" text="Wybierz OpenStreetMap albo całkowicie wyłącz podkład."/><select value={baseMap} onChange={event => setBaseMap(event.target.value as BaseMapKey)}><option value="NONE">Brak podkładu</option><option value="OSM">OpenStreetMap</option></select></label>
+        <label><LabelHelp label="Źródło podkładu" text="Wybierz jeden podkład. Usługi Geoportalu są przeznaczone wyłącznie do wizualizacji; warstwy projektu pozostają nad nimi."/><select value={baseMap} onChange={event => setBaseMap(event.target.value as BaseMapKey)}><option value="NONE">Brak podkładu</option><option value="OSM">OpenStreetMap</option><option value="GEOPORTAL_ORTHO">Geoportal — Ortofotomapa</option><option value="GEOPORTAL_TOPO">Geoportal — mapa topograficzna</option><option value="GEOPORTAL_BDOT10K">Geoportal — BDOT10k</option></select></label>
         <label><LabelHelp label="Krycie podkładu" text="0% oznacza pełną przezroczystość, a 100% — pełne krycie. Warstwy projektu pozostają nad podkładem."/><div className="opacity-control"><input aria-label="Krycie podkładu" type="range" min="0" max="100" step="5" value={baseOpacity} disabled={baseMap === 'NONE'} onInput={event => setBaseOpacity(Number(event.currentTarget.value))}/><output>{baseOpacity}%</output></div></label>
-        <small className="base-map-note">Google Satellite nie jest włączony: oficjalny Google Map Tiles API wymaga klucza, aktywnego rozliczania i tokenów sesji.</small>
       </section>
       <h3>Warstwy projektu <HelpTooltip text="Włącz kilka warstw, aby porównać ich przebieg. Aby odczytać atrybuty geometrii, wybierz na mapie narzędzie Informacja."/></h3>
       {layers.length === 0 && <p className="muted">Brak warstw. Użyj zakładki Import.</p>}
